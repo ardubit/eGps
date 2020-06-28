@@ -105,7 +105,7 @@ void setup()
   display.setCursor(0, 0);
   display.setTextSize(1);
   display.println(F("Init GPS"));
-  display.print(F("Point ant at the sky!"));
+  display.print(F("Point up to the sky!"));
   display.display();
   delay(2500);
 
@@ -260,18 +260,22 @@ void loop()
   if (gps.speed.isUpdated())
   {
     // 1.0 is good a precision
-    if (!(gps.speed.mps() <= 0.8))
+    if (!(gps.speed.mps() <= 0.79))
       mps = gps.speed.mps();
     else
       mps = 0.0;
 
-    if (!(gps.speed.kmph() <= 1.25))
+    if (!(gps.speed.kmph() <= 1.249))
       kmph = gps.speed.kmph();
     else
       kmph = 0.0;
 
     ageSpd = gps.speed.age();
-    minpkm = 60.0 / kmph;
+
+    if (!(kmph <= 0.49))
+      minpkm = 60.0 / kmph;
+    else
+      minpkm = 0.0;
 
 #ifdef SERIAL_OUT
     Serial.print(F("SPEED: "));
@@ -302,7 +306,7 @@ void loop()
     display.setTextSize(1);
     display.print(F("Tmp min/km: "));
 
-    if (minpkm < 4.0)
+    if (minpkm > 0.33 && minpkm <= 4.0)
       display.println(F("* * * *"));
     else if (minpkm >= 4.0 && minpkm <= 4.3)
       display.println(F("* * * "));
