@@ -1,6 +1,7 @@
 # eGPS ESP8266 Tracker
 
-![eGPS ESP8266 Tracker] (/files/20200626_203027.jpg)
+![eGPS ESP8266 Tracker] (https://raw.githubusercontent.com/ardubit/egps/master/files/20200626_203027.jpg)
+
 
 ## About the project
 
