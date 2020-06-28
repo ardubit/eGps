@@ -476,7 +476,7 @@ void calcDistanceKm()
     double dist = TinyGPSPlus::distanceBetween(lat, lng, sLat, sLng);
 
     // Walking 0.8 - 1.53 m/sec
-    // 0.8 is good a precision
+    // 0.8 is good a precision (0.8 * TIME_CALC_DISTANCE)
     if (!(dist <= 2.65))
     {
       dist = dist / 1000.0;
