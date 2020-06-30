@@ -4,7 +4,20 @@
 
 ## About the project
 
-This is easy to understand and build project. 
+Build and run. 
+
+Features:
+- Coordinates, lat,lng
+- Tempo, min/km
+- Speed, m/s
+- Speed, km/h
+- Altitude, m
+- Satellites
+- HDOP
+- Distance, km
+- Time UTC
+- Battery charge, %
+- Files
 
 ## Hardware
 
@@ -32,6 +45,7 @@ This is easy to understand and build project.
 * Low-power mode
 * Write data into the JSON files
 * Create a browser file viewer
+* String to char[]
 * mDNS
 
 Have Tracked!

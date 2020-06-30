@@ -4,19 +4,19 @@
 */
 
 #define SERIAL_OUT
+#define REV "28.06.20"
 
 #include "headers/Images.h"
 
 #include <ESP8266WiFi.h>
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
+#include <FS.h> // SPIFFS
 
 // ___ Adafruit ___
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-
-#define REV "28.06.20"
 
 TinyGPSPlus gps;
 SoftwareSerial ss(D3, D0);
@@ -27,49 +27,54 @@ SoftwareSerial ss(D3, D0);
 #define OFFSET 16
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-#define TIME_DISPLAY_ON 30 * 1000
+#define TIME_DISPLAY_ON 50 * 1000
+#define TIME_CHANGE_ACTIVITY 10 * 1000
 #define TIME_CALC_DISTANCE 3000
 #define TIME_CALC_BATLEVEL 5000
+#define TIME_LONGPRESS 2000
+#define TIME_WRITE_FILE 5000
 
+#define ACTIVITIES_NUM 12 // activity + 1
 byte activity = 0;
 
-static unsigned long startTimeDst = 0;
-static unsigned long startTimeBat = 0;
-static unsigned long currentMillis = 0;
+unsigned long sTimeAct = 0, sTimeDst = 0, sTimeBat = 0, sTimeWrt = 0;
+unsigned long sTimeBtn = 0;
 
-bool buttonPressed = false;
+bool statusRec = false;
+bool fileCreated = false;
+
+bool btnPressed = false;
+bool btnLongPressed = false;
 bool initMode = true;
-bool displayActive = true;
+bool dispActive = true;
 
-void ICACHE_RAM_ATTR ISR_button();
-
+String devMac = "MACAddress ERR";
+String dateStr = "Date ERR";
 String timeStr = "Time ERR";
-String timeSec = "Secs ERR";
+String timeHor = "H ERR";
+String timeMin = "M ERR";
+String timeSec = "S ERR";
 
-double sLat = 00.000000;
-double sLng = 00.000000;
-double lat = 0.0;
-double lng = 0.0;
+double sLat = 00.000000, sLng = 00.000000;
+double lat = 0.0, lng = 0.0;
 
-int ageSpd = 0;
-double mps = 0.0;
-double kmph = 0.0;
-double minpkm = 0.0;
-
-int ageAlt = 0;
-double alt = 0.0;
-
-int ageSat = 0;
+int ageSpd = 0, ageAlt = 0, ageSat = 0;
+double mps = 0.0, kmph = 0.0, minpkm = 0.0, alt = 0.0, hdop = 0.0;
+double maxKmph = 0.0, maxMps = 0.0;
 int sat = 0;
 
-double hdop = 0.0;
 double distanceKm = 0.0;
-
 unsigned long counterPoints = 0;
+
+String msgLog = "";
+
+void ICACHE_RAM_ATTR ISR_button_falling();
 
 void setup()
 {
+#ifdef SERIAL_OUT
   Serial.begin(9600);
+#endif
   ss.begin(9600);
 
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -80,13 +85,13 @@ void setup()
 
   initADC();
   pinMode(D4, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(D4), ISR_button, FALLING);
+  attachInterrupt(digitalPinToInterrupt(D4), ISR_button_falling, FALLING);
 
+  devMac = WiFi.macAddress();
   WiFi.mode(WIFI_OFF);
 
   // Display
   // ============================
-
   // Show splash screen
   display.clearDisplay();
   displaySplashScreen();
@@ -99,15 +104,18 @@ void setup()
   display.println(F("Developer: Aleksey M."));
   display.println(F("github.com/ardubit"));
   display.display();
-  delay(2500);
+  delay(2000);
 
   display.clearDisplay();
   display.setCursor(0, 0);
   display.setTextSize(1);
   display.println(F("Init GPS"));
-  display.print(F("Point up to the sky!"));
+  display.println(F("* Point up to the sky"));
+  display.println(F("* Hold to delete data"));
   display.display();
-  delay(2500);
+  delay(2000);
+
+  SPIFFSinit();
 
   while (!gps.location.isValid())
   {
@@ -121,7 +129,7 @@ void setup()
     display.print(F("Search GPS "));
 
     if (count >= 999)
-      display.println(F("Chge lctn!"));
+      display.println(F(" | RF | "));
     else
       display.println(F(""));
 
@@ -171,24 +179,26 @@ void setup()
   }
 
   initMode = false;
-  currentMillis = millis();
+  sTimeAct = sTimeBtn = millis();
 }
 
-void ICACHE_RAM_ATTR ISR_button()
+void ICACHE_RAM_ATTR ISR_button_falling()
 {
-  if (!initMode) // if init is ended
+  if (!initMode) // If only init is ended
   {
-    buttonPressed = true;
-    if (displayActive) // if display is active
+    btnPressed = true;
+    if (dispActive) // If display is active
     {
       activity++;
-      activity = activity % 10;
+      activity = activity % ACTIVITIES_NUM;
     }
   }
 }
 
 void loop()
 {
+  // Grab data from GPS
+  // ============================
   while (ss.available() > 0)
   {
     char temp = ss.read();
@@ -206,6 +216,7 @@ void loop()
     lat = gps.location.lat();
     lng = gps.location.lng();
 #ifdef SERIAL_OUT
+    Serial.println(F(""));
     Serial.println(F("=================== LOCATION "));
     Serial.println(lat, 6);
     Serial.println(lng, 6);
@@ -240,11 +251,46 @@ void loop()
   // ============================
   if (gps.time.isValid())
   {
-    timeStr = String(gps.time.hour()) + ":" + String(gps.time.minute());
-    timeSec = String(gps.time.second()) + " sec";
+    timeHor = String(gps.time.hour());
+    if (timeHor.toInt() <= 9)
+    {
+      String t = "0";
+      t += timeHor;
+      timeHor = t;
+    }
+
+    timeMin = String(gps.time.minute());
+    if (timeMin.toInt() <= 9)
+    {
+      String t = "0";
+      t += timeMin;
+      timeMin = t;
+    }
+
+    timeSec = String(gps.time.second());
+    if (timeSec.toInt() <= 9)
+    {
+      String t = "0";
+      t += timeSec;
+      timeSec = t;
+    }
+
+    timeStr = timeHor + ":" + timeMin;
+
 #ifdef SERIAL_OUT
     Serial.print(F("CLOCK: "));
     Serial.println(timeStr);
+#endif
+  }
+
+  // Get date
+  // ============================
+  if (gps.date.isValid())
+  {
+    dateStr = String(gps.date.value());
+#ifdef SERIAL_OUT
+    Serial.print(F("DATE: "));
+    Serial.println(dateStr);
 #endif
   }
 
@@ -277,6 +323,9 @@ void loop()
     else
       minpkm = 0.0;
 
+    maxKmph = calcMaxSpeed(maxKmph, kmph);
+    maxMps = calcMaxSpeed(maxMps, mps);
+
 #ifdef SERIAL_OUT
     Serial.print(F("SPEED: "));
     Serial.print(mps);
@@ -285,6 +334,8 @@ void loop()
 #endif
   }
 
+  // Activities
+  // ============================
   switch (activity)
   {
   case 0:
@@ -346,6 +397,20 @@ void loop()
   case 4:
     display.clearDisplay();
     display.setCursor(0, 0);
+    display.setTextSize(2);
+    display.print(maxMps);
+    display.setTextSize(1);
+    display.println(F("Max m/s:"));
+    display.println(F(" "));
+    display.setTextSize(2);
+    display.print(maxKmph);
+    display.setTextSize(1);
+    display.println(F("Max km/h:"));
+    display.display();
+    break;
+  case 5:
+    display.clearDisplay();
+    display.setCursor(0, 0);
     display.setTextSize(1);
     display.print(F("Alt m: "));
     display.print(F("age ms: "));
@@ -354,7 +419,7 @@ void loop()
     display.println(alt);
     display.display();
     break;
-  case 5:
+  case 6:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
@@ -365,7 +430,7 @@ void loop()
     display.println(sat);
     display.display();
     break;
-  case 6:
+  case 7:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
@@ -374,7 +439,7 @@ void loop()
     display.println(hdop);
     display.display();
     break;
-  case 7:
+  case 8:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
@@ -385,24 +450,37 @@ void loop()
     display.println(distanceKm);
     display.display();
     break;
-  case 8:
+  case 9:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
     display.print(F("Time UTC: "));
-    display.println(timeSec);
+    display.print(timeSec);
+    display.println(" sec");
     display.setTextSize(3);
     display.println(timeStr);
     display.display();
     break;
-  case 9:
-    if (millis() >= startTimeBat + TIME_CALC_BATLEVEL)
+  case 10:
+    if (millis() >= sTimeBat + TIME_CALC_BATLEVEL)
     {
-      startTimeBat += TIME_CALC_BATLEVEL;
+      sTimeBat += TIME_CALC_BATLEVEL;
       display.clearDisplay();
-      displayBatteryLevel(0, 0);
+      displayBatteryLevel();
       display.display();
     }
+    break;
+  case 11:
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.print(F("Files: "));
+    display.println(SPIFFScountFiles());
+    display.print(SPIFFSlistFiles());
+    display.display();
+#ifdef SERIAL_OUT
+    SPIFFSreadFile();
+#endif
     break;
   default:
     break;
@@ -417,35 +495,339 @@ void loop()
     display.display();
   }
 
-  if (buttonPressed)
+  // Display Auto PowerOFF
+  // ============================
+  if (btnPressed)
   {
-    currentMillis = millis();
+    sTimeAct = sTimeBtn = millis();
     displayEnable();
-    buttonPressed = false;
+    btnPressed = false;
   }
-  else
+
+  if (millis() >= sTimeBtn + TIME_DISPLAY_ON)
   {
+    sTimeBtn += TIME_DISPLAY_ON;
     displayDisable(); // Check display and turn off after a couple minutes
   }
 
   // Calc distanceKm
-  calcDistanceKm();
+  // ============================ Task
+  if (millis() >= sTimeDst + TIME_CALC_DISTANCE)
+  {
+    sTimeDst += TIME_CALC_DISTANCE;
+    calcDistanceKm();
+  }
+
+  // Detect LongPress (Listener)
+  // ============================ Timer
+  if (millis() >= sTimeBtn + TIME_LONGPRESS) // (sTimeBtn) updates when button is pressed
+  {
+    BTNdetectLongPress();
+  }
+
+  // Button LongPress (Handler)
+  // ============================
+  static bool latch = false;
+  if (btnLongPressed == true && latch == false)
+  {
+    latch = !latch;
+    // Recording flag
+    statusRec = !statusRec; // Invert status
+
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+
+    if (statusRec)
+      display.print(F("-- REC Started! --"));
+    else
+      display.print(F("-- REC Finished --"));
+
+    display.display();
+    delay(500);
+  }
+  else if (btnLongPressed == false)
+  {
+    latch = false;
+  }
+
+#ifdef SERIAL_OUT
+  Serial.print(F("BUTTON LONG PRESS: "));
+  Serial.println(btnLongPressed);
+  Serial.print(F("STATUS REC: "));
+  Serial.println(statusRec);
+#endif
+
+  // Recording
+  // ============================ Task
+  if (millis() >= sTimeWrt + TIME_WRITE_FILE)
+  {
+    sTimeWrt += TIME_WRITE_FILE;
+    SPIFFSwriteFile();
+  }
+
+  // Display REC
+  if (statusRec)
+  {
+    display.fillRect(display.width() - 2, 0, display.width() - 1, display.height() - 1, SSD1306_WHITE);
+    display.display();
+  }
+
+  // Auto change activity
+  // ============================ Task
+  if (millis() >= sTimeAct + TIME_CHANGE_ACTIVITY)
+  {
+    sTimeAct += TIME_CHANGE_ACTIVITY;
+    displayChangeActivity();
+  }
+
+  // Print Log
+  if (msgLog.length() > 0)
+  {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.print(msgLog);
+    display.display();
+    delay(500);
+    msgLog = "";
+  }
 }
 
+// ***************************************************************
+// END OF LOOP
+// ***************************************************************
+
+// SPIFFS
+// ============================
+void SPIFFSinit()
+{
+  if (!SPIFFS.begin())
+  {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.print(F("SPIFFS ERR"));
+    display.display();
+    delay(1000);
+  }
+  else if (digitalRead(D4) == LOW)
+  {
+    SPIFFS.format(); // Format and delete all data files
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.print(F("Delete Files OK"));
+    display.display();
+    delay(1000);
+  }
+}
+
+String SPIFFScountFiles() {
+  int counter = 0;
+  Dir dir = SPIFFS.openDir("/");
+  while (dir.next())
+  {
+    counter++;
+    yield();
+  }
+  return String(counter);
+}
+
+String SPIFFSlistFiles()
+{
+  String listFilesStr = "";
+  Dir dir = SPIFFS.openDir("/"); // File name should starting with "/"
+  while (dir.next())
+  {
+    listFilesStr += dir.fileName();
+    listFilesStr += "\n";
+    yield();
+  }
+
+  if (listFilesStr.length() != 0)
+  {
+#ifdef SERIAL_OUT
+    Serial.println(F("LIST OF FILES: "));
+    Serial.println(listFilesStr);
+#endif
+    return listFilesStr;
+  }
+  else
+    return listFilesStr = "No data";
+}
+
+void SPIFFSreadFile()
+{
+  Dir dir = SPIFFS.openDir("/"); // File name should starting with "/"
+  while (dir.next())
+  {
+    yield();
+
+    // Read a file name
+    String fileName = dir.fileName();
+#ifdef SERIAL_OUT
+    Serial.println(F(" --> DIR: "));
+    Serial.print(F("Dir Name: "));
+    Serial.println(dir.fileName());
+    Serial.print(F("File Size: "));
+    Serial.println(dir.fileSize()); // Get the size of the current file
+#endif
+
+    // Open a file
+    File file = SPIFFS.open(fileName, "r");
+    if (!file)
+    {
+#ifdef SERIAL_OUT
+      Serial.println(F("Open R FILE ERR"));
+#endif
+    }
+    else
+    {
+#ifdef SERIAL_OUT
+      Serial.println(F(" -> FILE: "));
+      for (int i = 0; i < file.size(); i++)
+      {
+        Serial.print((char)file.read()); // Read each char (byte)
+        yield();
+      }
+      Serial.println(F(" "));
+      Serial.print(F("File Size: "));
+      Serial.println(file.size()); // Get the size of the current file.
+      Serial.println(F(" -> END FILE: "));
+#endif
+      file.close();
+    }
+  }
+}
+
+// SPIFFS Recording
+// ============================================
+void SPIFFSwriteFile()
+{
+  static String fileName;
+  static bool nameNotCreated = true, jsonHeadNotCreated = true;
+  bool resetFlags = false;
+  static byte cycles = 0;
+
+  if (statusRec)
+  {
+    if (nameNotCreated)
+    {
+      fileName = "/t-"; // SPIFFS limitation: of 31 chars per file name
+      fileName += dateStr;
+      fileName += "-";
+      fileName += timeStr;
+      fileName += ":";
+      fileName += timeSec;
+      fileName += ".jt";
+      nameNotCreated = false;
+    }
+    else
+    {
+#ifdef SERIAL_OUT
+      Serial.print(F("File exists: "));
+      Serial.println(fileName);
+#endif
+    }
+
+    File fileObject = SPIFFS.open(fileName, "a"); // Open for appending (writing at end of file)
+    if (fileObject)
+    {
+      if (jsonHeadNotCreated)
+      {
+        String jsonHead;
+        jsonHead = "{\n";
+        jsonHead += " \"device\": {\n";
+        jsonHead += "  \"id\": \"";
+        jsonHead += devMac + ",\n";
+        jsonHead += "  \"name\": \"esp8266\"\n";
+        jsonHead += " },\n";
+        //
+        jsonHead += " \"file_name\": \"";
+        jsonHead += fileName + "\",\n";
+        jsonHead += " \"distance\": ";
+        jsonHead += String(distanceKm) + ",\n";
+        jsonHead += " \"start_date_utc\": \"";
+        jsonHead += dateStr + "\",\n";
+        jsonHead += " \"start_time_utc\": \"";
+        jsonHead += timeStr + ":" + timeSec + "\",\n";
+        jsonHead += " \"track\": [\n";
+        // Print to the fileObject
+        fileObject.print(jsonHead);
+        jsonHeadNotCreated = false;
+      }
+
+      // Form JSON body from Points
+      String jsonBody;
+      jsonBody = "   {\n";
+      jsonBody += "    lat : ";
+      jsonBody += String(lat, 6);
+      jsonBody += ",\n";
+      jsonBody += "    lng : ";
+      jsonBody += String(lng, 6);
+      jsonBody += "\n";
+      jsonBody += "   },\n";
+      // Print to the fileObject
+      fileObject.print(jsonBody);
+
+      fileObject.close();
+      displayMsg("File saved!");
+    }
+    else
+    {
+      // File does not opened successfully
+      displayMsg("File OPEN ERR!");
+    }
+  }
+  else
+  {
+    // End the file
+    resetFlags = true;
+  }
+
+  if (resetFlags)
+  {
+    nameNotCreated = true;
+    jsonHeadNotCreated = true;
+  }
+}
+
+// Save Output
+// ============================
+void displayMsg(String s)
+{
+  msgLog = s;
+}
+
+// Button
+// ============================
+bool BTNdetectLongPress()
+{
+  if (digitalRead(D4) == LOW && btnLongPressed == false)
+    return btnLongPressed = true;
+  else if (digitalRead(D4) == HIGH)
+    return btnLongPressed = false; // Reset longPress flag
+}
+
+// Display
+// ============================
 void displayDisable()
 {
-  if (millis() >= currentMillis + TIME_DISPLAY_ON)
-  {
-    display.ssd1306_command(SSD1306_DISPLAYOFF);
-    currentMillis += TIME_DISPLAY_ON;
-    displayActive = false;
-  }
+  display.ssd1306_command(SSD1306_DISPLAYOFF);
+  dispActive = false;
 }
 
 void displayEnable()
 {
   display.ssd1306_command(SSD1306_DISPLAYON);
-  displayActive = true;
+  dispActive = true;
+}
+
+void displayChangeActivity()
+{
+  activity++;
+  activity = activity % ACTIVITIES_NUM;
 }
 
 void displaySplashScreen()
@@ -457,46 +839,50 @@ void displaySplashScreen()
       display.clearDisplay();
       display.drawBitmap(((display.width() - IMG_W) / 2) - OFFSET, (display.height() - IMG_H) / 2, RUNNING_MAN_R[i], IMG_H, IMG_W, WHITE);
       display.setCursor(((display.width() - IMG_W) / 2) - OFFSET + IMG_W, (display.height() - IMG_H) / 2);
-      display.println(" eGPS ...");
+      display.println("eGPS");
       display.display();
-
       yield();
       delay(150);
     }
   }
 }
 
+// Calculations
+// ============================
 void calcDistanceKm()
 {
-  if (millis() >= startTimeDst + TIME_CALC_DISTANCE)
+  // lat, lng, sLat, sLng
+  // Test values 51.616317, 33.604432, 51.617193, 33.606631 - 180 m
+  double dist = TinyGPSPlus::distanceBetween(lat, lng, sLat, sLng);
+  // Walking 0.8 - 1.53 m/sec
+  // 0.8 is good a precision (0.8 * TIME_CALC_DISTANCE)
+  if (!(dist <= 2.65))
   {
-    startTimeDst += TIME_CALC_DISTANCE;
-    // lat, lng, sLat, sLng
-    // Test values 51.616317, 33.604432, 51.617193, 33.606631 - 180 m
-    double dist = TinyGPSPlus::distanceBetween(lat, lng, sLat, sLng);
+    dist = dist / 1000.0;
+    distanceKm += dist;
+    counterPoints++;
+  }
+  sLat = lat;
+  sLng = lng;
+}
 
-    // Walking 0.8 - 1.53 m/sec
-    // 0.8 is good a precision (0.8 * TIME_CALC_DISTANCE)
-    if (!(dist <= 2.65))
-    {
-      dist = dist / 1000.0;
-      distanceKm += dist;
-      counterPoints++;
-    }
-
-    sLat = lat;
-    sLng = lng;
+double calcMaxSpeed(double &maxSpd, double &spd)
+{
+  if (maxSpd > spd)
+    return maxSpd;
+  else
+  {
+    maxSpd = spd;
+    return maxSpd;
   }
 }
 
 // ADC
 // ==================================
-
 #define MAX_BAT_VOLT 4.20 // 1023
 #define MIN_BAT_VOLT 2.49 // 607
 #define MIN_BAT_ADC 607
 #define MAX_BAT_ADC 1023
-
 // #define FULL_BAT_CHARGE 974
 // #define QUAR_BAT_CHARGE 883
 // #define HALF_BAT_CHARGE 792
@@ -504,13 +890,15 @@ void calcDistanceKm()
 // #define CRIT_BAT_CHARGE 609
 // #define DIED_BAT_CHARGE 607
 #define NO___BAT_CHARGE 49
+#define X 0
+#define Y 0
 
 void initADC()
 {
   pinMode(A0, INPUT);
 }
 
-void displayBatteryLevel(byte x, byte y)
+void displayBatteryLevel()
 {
   /*
   ADC
@@ -579,10 +967,8 @@ void displayBatteryLevel(byte x, byte y)
   - Volts 
   - ADC Value 
   - Percent of battery charge
-  */
 
-  /*
- LiPo starts to die quickly from 2.5 - 2.7V
+   LiPo starts to die quickly from 2.5 - 2.7V
   */
 
   unsigned int batADC = analogRead(A0);
@@ -604,7 +990,7 @@ void displayBatteryLevel(byte x, byte y)
   // display.clearDisplay();
   if (batADC <= NO___BAT_CHARGE)
   {
-    display.drawBitmap(x, y, BATTERY[6], IMG_H, IMG_W, WHITE);
+    display.drawBitmap(X, Y, BATTERY[6], IMG_H, IMG_W, WHITE);
   }
   else
   {
@@ -612,39 +998,39 @@ void displayBatteryLevel(byte x, byte y)
     batPercent = map(batADC, MIN_BAT_ADC, MAX_BAT_ADC, 0, 100);
     if (batPercent == 0)
     {
-      display.drawBitmap(x, y, BATTERY[5], IMG_H, IMG_W, WHITE);
+      display.drawBitmap(X, Y, BATTERY[5], IMG_H, IMG_W, WHITE);
     }
     if (batPercent > 0 && batPercent <= 1)
     {
-      display.drawBitmap(x, y, BATTERY[4], IMG_H, IMG_W, WHITE);
+      display.drawBitmap(X, Y, BATTERY[4], IMG_H, IMG_W, WHITE);
     }
     if (batPercent > 1 && batPercent <= 25)
     {
-      display.drawBitmap(x, y, BATTERY[3], IMG_H, IMG_W, WHITE);
+      display.drawBitmap(X, Y, BATTERY[3], IMG_H, IMG_W, WHITE);
     }
     if (batPercent > 25 && batPercent <= 50)
     {
-      display.drawBitmap(x, y, BATTERY[2], IMG_H, IMG_W, WHITE);
+      display.drawBitmap(X, Y, BATTERY[2], IMG_H, IMG_W, WHITE);
     }
     if (batPercent > 50 && batPercent <= 75)
     {
-      display.drawBitmap(x, y, BATTERY[1], IMG_H, IMG_W, WHITE);
+      display.drawBitmap(X, Y, BATTERY[1], IMG_H, IMG_W, WHITE);
     }
     if (batPercent > 75 && batPercent <= 95)
     {
-      display.drawBitmap(x, y, BATTERY[0], IMG_H, IMG_W, WHITE);
+      display.drawBitmap(X, Y, BATTERY[0], IMG_H, IMG_W, WHITE);
     }
     if (batPercent > 95 && batPercent <= 100)
     {
-      display.drawBitmap(x, y, BATTERY[0], IMG_H, IMG_W, WHITE);
+      display.drawBitmap(X, Y, BATTERY[0], IMG_H, IMG_W, WHITE);
     }
   }
 
-  display.setCursor(x + IMG_W, y);
+  display.setCursor(X + IMG_W, Y);
   display.setTextSize(1);
-  display.print(F("bat chrg: "));
+  display.print(F("Bat charge: "));
   display.setTextSize(3);
-  display.setCursor(x, y + IMG_H);
+  display.setCursor(X, Y + IMG_H);
   display.print(batPercent);
   display.print("% ");
   // display.display();
