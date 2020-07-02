@@ -4,22 +4,56 @@
 
 ## About the project
 
-Build and run. 
+Quectel L80 and ESP8266 based GPS tracker. Build and run. 
 
-Features:
-- Coordinates, lat,lng
-- Tempo, min/km
-- Speed, m/s
-- Speed, km/h
-- Altitude, m
-- Satellites
-- HDOP
-- Distance, km
-- Time UTC
-- Battery charge, %
-- Files
+__Features:__
+
+- [ YES ] Coordinates, lat,lng
+- [ YES ] Tempo, min/km
+- [ YES ] Speed, m/s
+- [ YES ] Speed, km/h
+- [ YES ] Altitude, m
+- [ YES ] Satellites
+- [ YES ] HDOP
+- [ YES ] Distance, km
+- [ YES ] Time UTC
+- [ YES ] Battery charge, %
+- [ YES ] Display Auto PowerOff
+- [ NO  ] Sleep Mode
+- [ NO  ] Web UI
+- [ YES ] Saving data into a JSON file
+
+## JSON
+
+Output file:
+
+~~~
+{
+ "device": {
+  "id": "XX:XX:XX:XX:XX:XX",
+  "name": "esp8266"
+ },
+ "file_name": "/t-300620-21:18:59.json",
+ "start_date_utc": "300620",
+ "start_time_utc": "21:18:59",
+ "track": [
+   {
+    "lat" : 12.123456,
+    "lng" : 21.654321
+   },
+   {
+    "lat" : 12.123456,
+    "lng" : 21.654321
+   }
+ ],
+ "distance": 1.02
+}
+~~~
 
 ## Hardware
+
+### MCU
+- ESP8266EX
 
 ### Quectel L80-R
 - GPS/QZSS

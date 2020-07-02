@@ -79,7 +79,7 @@ PROGMEM const unsigned char BATTERY[][8] = {
      B00000000}};
 
 // Running man
-PROGMEM const unsigned char RUNNING_MAN_R[][8] = {
+PROGMEM const unsigned char RUNNING_MAN_RIGHT[][8] = {
     {/* 8, 8, */
      B00011000,
      B01011000,
@@ -107,7 +107,37 @@ PROGMEM const unsigned char RUNNING_MAN_R[][8] = {
      B01101000,
      B01001100,
      B00000000}};
-     
+
+// Victory man
+PROGMEM const unsigned char VICTORY_MAN[][8] = {
+    /* 8, 8, */
+    {B00110000,
+     B00110010,
+     B00011110,
+     B11111100,
+     B00111000,
+     B00011000,
+     B00011000,
+     B00000000},
+    {/* 8, 8, */
+     B00110010,
+     B00110010,
+     B10011100,
+     B01111100,
+     B00111000,
+     B00011000,
+     B00011000,
+     B00000000},
+    {/* 8, 8, */
+     B00110010,
+     B00110010,
+     B10011100,
+     B01111100,
+     B00111000,
+     B00011000,
+     B00011000,
+     B00000000}};
+
 // Satellite
 PROGMEM const unsigned char SATELLITE[] = {
     /* 8, 8, */
@@ -250,19 +280,31 @@ PROGMEM const unsigned char POINTER[] = {
     B00000000};
 
 // Error
-PROGMEM const unsigned char ERROR_STATUS[] = {
+PROGMEM const unsigned char STATUS_ERR[] = {
     /* 8, 8, */
     B10000010,
     B11000110,
-    B11101110,
-    B11111110,
-    B11101110,
+    B01101100,
+    B00111000,
+    B01101100,
     B11000110,
     B10000010,
     B00000000};
 
+// Error
+PROGMEM const unsigned char STATUS_QUESTION[] = {
+    /* 8, 8, */
+    B11111110,
+    B11000110,
+    B10111010,
+    B11111010,
+    B11110110,
+    B11101110,
+    B11101110,
+    B00000000};
+
 // Ok
-PROGMEM const unsigned char OK_STATUS[] = {
+PROGMEM const unsigned char STATUS_OK[] = {
     /* 8, 8, */
     B00000000,
     B00000010,
@@ -276,44 +318,38 @@ PROGMEM const unsigned char OK_STATUS[] = {
 // WiFi router
 PROGMEM const unsigned char WIFI_ROUTER[] = {
     /* 8, 8, */
-    B00101000,
+    B00000000,
     B10010010,
-    B01000100,
-    B00101000,
+    B01010100,
+    B00111000,
     B11111110,
     B11111110,
     B11111110,
     B00000000};
 
 // Speed
-PROGMEM const unsigned char SPEED[][8] = {
+PROGMEM const unsigned char SPEED[] = {
     /* 8, 8, */
-    {B01110000,
-     B00111000,
-     B00011100,
-     B00001110,
-     B00011100,
-     B00111000,
-     B01110000,
-     B00000000},
-    {/* 8, 8, */
-     B00011100,
-     B10001100,
-     B11000100,
-     B11100000,
-     B11000100,
-     B10001100,
-     B00011100,
-     B00000000},
-    {/* 8, 8, */
-     B10000110,
-     B11000010,
-     B11100000,
-     B01110000,
-     B11100000,
-     B11000010,
-     B10000110,
-     B00000000}};
+    B01110000,
+    B10111000,
+    B01011100,
+    B10101110,
+    B01011100,
+    B10111000,
+    B01110000,
+    B00000000};
+
+// Tempo
+PROGMEM const unsigned char TEMPO[] = {
+    /* 8, 8, */
+    B01010000,
+    B10100000,
+    B01010000,
+    B10100000,
+    B11111000,
+    B11111100,
+    B11111110,
+    B00000000};
 
 // Latitude
 PROGMEM const unsigned char LAT[] = {
@@ -342,67 +378,25 @@ PROGMEM const unsigned char LNG[] = {
 // Time
 PROGMEM const unsigned char TIME[] = {
     /* 8, 8, */
-    B01111100,
-    B10010010,
+    B11111110,
+    B11010110,
     B10010010,
     B10011010,
     B10000010,
-    B10000010,
-    B01111100,
+    B11000110,
+    B11111110,
     B00000000};
-
-// Victory
-PROGMEM const unsigned char VICTORY_MAN[][8] = {
-    /* 8, 8, */
-    {B00110000,
-     B00110010,
-     B00011110,
-     B11111100,
-     B00111000,
-     B00011000,
-     B00011000,
-     B00000000},
-    {/* 8, 8, */
-     B00110010,
-     B00110010,
-     B10011100,
-     B01111100,
-     B00111000,
-     B00011000,
-     B00011000,
-     B00000000},
-    {/* 8, 8, */
-     B00110010,
-     B00110010,
-     B10011100,
-     B01111100,
-     B00111000,
-     B00011000,
-     B00011000,
-     B00000000}};
 
 // Distance
 PROGMEM const unsigned char DISTANCE[] = {
     /* 8, 8, */
-    B01100000,
-    B00010000,
-    B01101000,
-    B10001100,
-    B01111110,
-    B00001100,
-    B00001000,
-    B00000000};
-
-// Max speed
-PROGMEM const unsigned char SPEED_MAX[] = {
-    /* 8, 8, */
-    B01100000,
-    B01101000,
-    B00001100,
-    B11111110,
-    B01101100,
-    B01101000,
-    B01100000,
+    B11110000,
+    B11100000,
+    B11100000,
+    B10010010,
+    B00001110,
+    B00001110,
+    B00011110,
     B00000000};
 
 // Date
@@ -414,6 +408,30 @@ PROGMEM const unsigned char DATE[] = {
     B10000010,
     B10111010,
     B10000010,
+    B11111110,
+    B00000000};
+
+// File
+PROGMEM const unsigned char FILES[] = {
+    /* 8, 8, */
+    B11111000,
+    B11100100,
+    B11100010,
+    B11100010,
+    B11111110,
+    B11111110,
+    B11111110,
+    B00000000};
+
+// Altitude
+PROGMEM const unsigned char ALTITUDE[] = {
+    /* 8, 8, */
+    B00000100,
+    B00001110,
+    B00000100,
+    B00010000,
+    B00101000,
+    B01111100,
     B11111110,
     B00000000};
 

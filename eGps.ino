@@ -3,15 +3,15 @@
    Author: Aleksey M.
 */
 
-#define SERIAL_OUT
-#define REV "28.06.20"
+// #define SERIAL_OUT
+#define REV "02.07.20"
 
 #include "headers/Images.h"
 
 #include <ESP8266WiFi.h>
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
-#include <FS.h> // SPIFFS
+#include <LittleFS.h>
 
 // ___ Adafruit ___
 #include <Wire.h>
@@ -24,49 +24,55 @@ SoftwareSerial ss(D3, D0);
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
 #define OLED_RESET -1
-#define OFFSET 16
+#define OFFSET_X 8
+#define OFFSET_Y 4
+#define OFFSET_ICON 2
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 #define TIME_DISPLAY_ON 50 * 1000
-#define TIME_CHANGE_ACTIVITY 10 * 1000
+#define TIME_CHANGE_ACTIVITY 5 * 1000
 #define TIME_CALC_DISTANCE 3000
 #define TIME_CALC_BATLEVEL 5000
 #define TIME_LONGPRESS 2000
 #define TIME_WRITE_FILE 5000
+#define TIME_SERVICES 60 * 1000
+
+#define TIME_DELAY_MSG 2000
+#define TIME_DELAY_MSG_LONG 4000
+#define TIME_DELAY_SHORT 500
+#define TIME_DELAY 1000
 
 #define ACTIVITIES_NUM 12 // activity + 1
 byte activity = 0;
 
-unsigned long sTimeAct = 0, sTimeDst = 0, sTimeBat = 0, sTimeWrt = 0;
+#define THRESHOLD_PERCENT_MEMORY_FULL 80
+
+// PROGMEM saves string in flash, either string will be placed in RAM
+const char *deviceName PROGMEM = "esp8266"; // const char deviceName[] = "esp8266";
+const char *msgOK PROGMEM = "OK";
+const char *msgERR PROGMEM = "ERR";
+
+unsigned long sTimeAct = 0, sTimeDst = 0, sTimeBat = 0, sTimeWrt = 0, sTimeSrv = 0;
 unsigned long sTimeBtn = 0;
 
-bool statusRec = false;
-bool fileCreated = false;
-
-bool btnPressed = false;
-bool btnLongPressed = false;
-bool initMode = true;
-bool dispActive = true;
+bool initMode = true, dispActive = true;
+bool btnPressed = false, btnLongPressed = false, btnPressedInitMode = false;
+bool statusRec = false, statusChangeActivity = false, statusWiFi = false;
 
 String devMac = "MACAddress ERR";
 String dateStr = "Date ERR";
-String timeStr = "Time ERR";
-String timeHor = "H ERR";
-String timeMin = "M ERR";
-String timeSec = "S ERR";
+String timeStr = "Time ERR", timeHor = "H ERR", timeMin = "M ERR", timeSec = "S ERR";
+String msgLog = "";
 
 double sLat = 00.000000, sLng = 00.000000;
 double lat = 0.0, lng = 0.0;
 
-int ageSpd = 0, ageAlt = 0, ageSat = 0;
-double mps = 0.0, kmph = 0.0, minpkm = 0.0, alt = 0.0, hdop = 0.0;
-double maxKmph = 0.0, maxMps = 0.0;
 int sat = 0;
-
+int ageSpd = 0, ageAlt = 0, ageSat = 0;
+double mps = 0.0, kmph = 0.0, minpkm = 0.0, bMinpkm = 0.0, alt = 0.0, hdop = 0.0;
+double maxKmph = 0.0, maxMps = 0.0;
 double distanceKm = 0.0;
 unsigned long counterPoints = 0;
-
-String msgLog = "";
 
 void ICACHE_RAM_ATTR ISR_button_falling();
 
@@ -77,6 +83,7 @@ void setup()
 #endif
   ss.begin(9600);
 
+  // Init OLED
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
   display.setTextSize(1);
@@ -86,9 +93,7 @@ void setup()
   initADC();
   pinMode(D4, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(D4), ISR_button_falling, FALLING);
-
   devMac = WiFi.macAddress();
-  WiFi.mode(WIFI_OFF);
 
   // Display
   // ============================
@@ -97,26 +102,58 @@ void setup()
   displaySplashScreen();
 
   display.clearDisplay();
-  display.setCursor(0, 0);
   display.setTextSize(1);
-  display.println(F("Firmware:"));
+  display.setCursor(0, 0);
+  display.println(F("eGPS Firmware"));
   display.println(REV);
-  display.println(F("Developer: Aleksey M."));
+  display.println(F("Aleksey M."));
   display.println(F("github.com/ardubit"));
   display.display();
-  delay(2000);
+  delay(TIME_DELAY_MSG_LONG);
 
   display.clearDisplay();
   display.setCursor(0, 0);
-  display.setTextSize(1);
-  display.println(F("Init GPS"));
-  display.println(F("* Point up to the sky"));
-  display.println(F("* Hold to delete data"));
+  display.println(F("Boot"));
+  display.drawBitmap(0, IMG_H * 1, STATUS_OK, IMG_H, IMG_W, WHITE);
+  display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 1);
+  display.println(F("PRESS to Enter"));
   display.display();
-  delay(2000);
+  delay(TIME_DELAY_MSG_LONG);
 
-  SPIFFSinit();
+  bool statusSkip = true;
+  byte counter = 5;
+  do
+  {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println(F("Load Default after:"));
+    display.setTextSize(3);
+    display.print(counter);
+    display.display();
+    delay(TIME_DELAY);
+    if (btnPressedInitMode)
+    {
+      statusSkip = false;
+      btnPressedInitMode = false;
+      break;
+    }
+    yield();
+    counter--;
+  } while (counter >= 0 && counter <= 5);
 
+  // Boot
+  FSinit();
+  WiFiInit();
+
+  if (!statusSkip)
+  {
+    WiFiEnable();
+    initChangeActivity();
+    FSformat();
+  }
+
+  // Init GPS
   while (!gps.location.isValid())
   {
     static int count = 0;
@@ -126,6 +163,8 @@ void setup()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.print(F("Search GPS "));
 
     if (count >= 999)
@@ -143,7 +182,7 @@ void setup()
     Serial.println(gps.satellites.value());
 #endif
     count++;
-    delay(250);
+    delay(TIME_DELAY_SHORT / 2);
   }
 
   if (gps.location.isValid()) // Set start point
@@ -154,11 +193,13 @@ void setup()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, STATUS_OK, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.println(F("Starting..."));
     display.setTextSize(3);
-    display.println(F("OK"));
+    display.println(msgOK);
     display.display();
-    delay(1000);
+    delay(TIME_DELAY_MSG);
 
 #ifdef SERIAL_OUT
     Serial.println(F("Start Point:"));
@@ -171,16 +212,22 @@ void setup()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, STATUS_ERR, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.println(F("Starting..."));
     display.setTextSize(3);
-    display.println(F("ERR"));
+    display.println(msgERR);
     display.display();
-    delay(1000);
+    delay(TIME_DELAY_MSG);
   }
 
   initMode = false;
   sTimeAct = sTimeBtn = millis();
 }
+
+// ***************************************************************
+// END OF SETUP
+// ***************************************************************
 
 void ICACHE_RAM_ATTR ISR_button_falling()
 {
@@ -192,6 +239,10 @@ void ICACHE_RAM_ATTR ISR_button_falling()
       activity++;
       activity = activity % ACTIVITIES_NUM;
     }
+  }
+  else
+  {
+    btnPressedInitMode = true;
   }
 }
 
@@ -325,6 +376,7 @@ void loop()
 
     maxKmph = calcMaxSpeed(maxKmph, kmph);
     maxMps = calcMaxSpeed(maxMps, mps);
+    bMinpkm = calcBestTempo(bMinpkm, minpkm);
 
 #ifdef SERIAL_OUT
     Serial.print(F("SPEED: "));
@@ -355,6 +407,8 @@ void loop()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, TEMPO, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.print(F("Tmp min/km: "));
 
     if (minpkm > 0.33 && minpkm <= 4.0)
@@ -376,8 +430,10 @@ void loop()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, SPEED, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.print(F("Spd m/s: "));
-    display.print(F("age ms: "));
+    display.print(F("age:"));
     display.println(ageSpd);
     display.setTextSize(3);
     display.println(mps);
@@ -387,8 +443,10 @@ void loop()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, SPEED, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.print(F("Spd km/h: "));
-    display.print(F("age ms: "));
+    display.print(F("age:"));
     display.println(ageSpd);
     display.setTextSize(3);
     display.println(kmph);
@@ -397,23 +455,24 @@ void loop()
   case 4:
     display.clearDisplay();
     display.setCursor(0, 0);
-    display.setTextSize(2);
-    display.print(maxMps);
     display.setTextSize(1);
-    display.println(F("Max m/s:"));
-    display.println(F(" "));
-    display.setTextSize(2);
-    display.print(maxKmph);
-    display.setTextSize(1);
-    display.println(F("Max km/h:"));
+    display.drawBitmap(0, IMG_H * 0, DISTANCE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+    display.print(F("Dist km: "));
+    display.print(F("pts:"));
+    display.println(counterPoints);
+    display.setTextSize(3);
+    display.println(distanceKm);
     display.display();
     break;
   case 5:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, ALTITUDE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.print(F("Alt m: "));
-    display.print(F("age ms: "));
+    display.print(F("age:"));
     display.println(ageAlt);
     display.setTextSize(3);
     display.println(alt);
@@ -423,8 +482,10 @@ void loop()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.print(F("Sat: "));
-    display.print(F("fix ms: "));
+    display.print(F("fix:"));
     display.println(ageSat);
     display.setTextSize(3);
     display.println(sat);
@@ -434,34 +495,14 @@ void loop()
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
     display.println(F("HDOP:"));
     display.setTextSize(3);
     display.println(hdop);
     display.display();
     break;
   case 8:
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.setTextSize(1);
-    display.print(F("Dist km: "));
-    display.print(F("pts: "));
-    display.println(counterPoints);
-    display.setTextSize(3);
-    display.println(distanceKm);
-    display.display();
-    break;
-  case 9:
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.setTextSize(1);
-    display.print(F("Time UTC: "));
-    display.print(timeSec);
-    display.println(" sec");
-    display.setTextSize(3);
-    display.println(timeStr);
-    display.display();
-    break;
-  case 10:
     if (millis() >= sTimeBat + TIME_CALC_BATLEVEL)
     {
       sTimeBat += TIME_CALC_BATLEVEL;
@@ -470,17 +511,61 @@ void loop()
       display.display();
     }
     break;
+  case 9:
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, TIME, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+    display.print(F("Time UTC:"));
+    display.print(timeSec);
+    display.println(" sec");
+    display.setTextSize(3);
+    display.println(timeStr);
+    display.display();
+    break;
+  case 10:
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, FILES, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+    display.print(F("Files: "));
+    display.print(FScountFiles());
+    display.print(F(" KB:"));
+    display.println(FScheckMemoryKB());
+    display.print(FSlistFiles());
+    display.display();
+#ifdef SERIAL_OUT
+    if (!statusRec)
+      FSreadFile();
+#endif
+    break;
   case 11:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
-    display.print(F("Files: "));
-    display.println(SPIFFScountFiles());
-    display.print(SPIFFSlistFiles());
+    // Best Tempo
+    display.drawBitmap(0, IMG_H * 0, TEMPO, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 0);
+    display.print(F("Best Tempo:"));
+    display.println(bMinpkm);
+    // Max Speed
+    display.drawBitmap(0, IMG_H * 1, SPEED, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 1);
+    display.print(F(" Max Speed:"));
+    display.println(maxKmph);
+    // Total Distance
+    display.drawBitmap(0, IMG_H * 2, DISTANCE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 2);
+    display.print(F("  Distance:"));
+    display.println(distanceKm);
+    // Elapsed Time
+    display.drawBitmap(0, IMG_H * 3, TIME, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 3);
+    display.print(F("  UTC Time:"));
+    display.println(timeStr);
     display.display();
-#ifdef SERIAL_OUT
-    SPIFFSreadFile();
-#endif
     break;
   default:
     break;
@@ -490,8 +575,10 @@ void loop()
   {
     display.clearDisplay();
     display.setCursor(0, 0);
-    display.setTextSize(2);
-    display.print(F("GPS ERR"));
+    display.setTextSize(1);
+    display.println(F("GPS"));
+    display.setTextSize(3);
+    display.println(msgERR);
     display.display();
   }
 
@@ -539,12 +626,23 @@ void loop()
     display.setTextSize(1);
 
     if (statusRec)
-      display.print(F("-- REC Started! --"));
+    {
+      RSTValues();
+      display.setTextSize(3);
+      display.println(F("REC"));
+      display.setTextSize(1);
+      display.println(F("-> Started!"));
+    }
     else
-      display.print(F("-- REC Finished --"));
+    {
+      display.setTextSize(3);
+      display.println(F("REC"));
+      display.setTextSize(1);
+      display.println(F("-> Stopped!"));
+    }
 
     display.display();
-    delay(500);
+    delay(TIME_DELAY_SHORT);
   }
   else if (btnLongPressed == false)
   {
@@ -563,7 +661,7 @@ void loop()
   if (millis() >= sTimeWrt + TIME_WRITE_FILE)
   {
     sTimeWrt += TIME_WRITE_FILE;
-    SPIFFSwriteFile();
+    FSwriteFile();
   }
 
   // Display REC
@@ -575,10 +673,13 @@ void loop()
 
   // Auto change activity
   // ============================ Task
-  if (millis() >= sTimeAct + TIME_CHANGE_ACTIVITY)
+  if (statusChangeActivity)
   {
-    sTimeAct += TIME_CHANGE_ACTIVITY;
-    displayChangeActivity();
+    if (millis() >= sTimeAct + TIME_CHANGE_ACTIVITY)
+    {
+      sTimeAct += TIME_CHANGE_ACTIVITY;
+      displayChangeActivity();
+    }
   }
 
   // Print Log
@@ -589,43 +690,218 @@ void loop()
     display.setTextSize(1);
     display.print(msgLog);
     display.display();
-    delay(500);
+    delay(TIME_DELAY_SHORT);
     msgLog = "";
   }
+
+  // Services
+  // ============================ Task
+  if (millis() >= sTimeSrv + TIME_SERVICES)
+  {
+    sTimeSrv += TIME_SERVICES;
+    FScheckMemory();
+    FSgarbageCollection();
+  }
+
+#ifdef SERIAL_OUT
+  FSInfo fs_info;         // Create FSInfo structure
+  LittleFS.info(fs_info); // Fill out with data about FS
+  float fsTotalKB = (float)fs_info.totalBytes / 1024.0;
+  float fsUsedKB = (float)fs_info.usedBytes / 1024.0;
+  Serial.println(F("-------------"));
+  Serial.println(F("FS Info: "));
+  Serial.print(F(" -> Total KB: "));
+  Serial.println(fsTotalKB);
+  Serial.print(F(" ->  Used KB: "));
+  Serial.println(fsUsedKB);
+#endif
 }
 
 // ***************************************************************
 // END OF LOOP
 // ***************************************************************
 
-// SPIFFS
+// WiFi
 // ============================
-void SPIFFSinit()
+void WiFiInit()
 {
-  if (!SPIFFS.begin())
+  // Init WiFi
+  WiFi.mode(WIFI_OFF);
+}
+
+void WiFiEnable()
+{
+  // Enable WiFi
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.setTextSize(1);
+  display.drawBitmap(0, IMG_H * 0, STATUS_QUESTION, IMG_H, IMG_W, WHITE);
+  display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+  display.println(F("Enable WiFi?"));
+  display.println(F("   Press - Yes"));
+  display.display();
+  delay(TIME_DELAY_MSG_LONG);
+
+  byte counter = 5;
+  do
   {
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
-    display.print(F("SPIFFS ERR"));
+    display.println(F("Countdown"));
+    display.setTextSize(3);
+    display.print(counter);
     display.display();
-    delay(1000);
-  }
-  else if (digitalRead(D4) == LOW)
+    delay(TIME_DELAY);
+    if (btnPressedInitMode)
+    {
+      // TODO
+      statusWiFi = true;
+      btnPressedInitMode = false;
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.setTextSize(1);
+      display.drawBitmap(0, IMG_H * 0, STATUS_OK, IMG_H, IMG_W, WHITE);
+      display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+      display.println(F("WiFi Enabled"));
+      display.setTextSize(3);
+      display.println(msgOK);
+      display.display();
+      delay(TIME_DELAY_MSG);
+      break;
+    }
+    counter--;
+    yield();
+  } while (counter >= 0 && counter <= 5);
+
+  if (!statusWiFi)
   {
-    SPIFFS.format(); // Format and delete all data files
+    WiFi.mode(WIFI_OFF);
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
-    display.print(F("Delete Files OK"));
+    display.drawBitmap(0, IMG_H * 0, STATUS_OK, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+    display.println(F("WiFi OFF!"));
+    display.setTextSize(3);
+    display.println(msgOK);
     display.display();
-    delay(1000);
+    delay(TIME_DELAY_MSG);
   }
 }
 
-String SPIFFScountFiles() {
+// FS
+// ============================
+void FSformat()
+{
+  // Format Memory
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.setTextSize(1);
+  display.println(F("Format Memory"));
+  display.drawBitmap(0, IMG_H * 1, STATUS_QUESTION, IMG_H, IMG_W, WHITE);
+  display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_W * 1);
+  display.println(F("Remove Files?"));
+  display.println(F("   Hold - Yes"));
+  display.display();
+  delay(TIME_DELAY_MSG_LONG);
+
+  byte counter = 5;
+  do
+  {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.println(F("Countdown"));
+    display.setTextSize(3);
+    display.print(counter);
+    display.display();
+    delay(TIME_DELAY);
+    if ((digitalRead(D4) == LOW) && (counter == 0))
+    {
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.setTextSize(1);
+      display.println(F("-> Formatting..."));
+      display.display();
+
+      LittleFS.format(); // Format and delete all data files
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.drawBitmap(0, IMG_H * 0, STATUS_OK, IMG_H, IMG_W, WHITE);
+      display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+      display.println(F("Files removed!"));
+      display.setTextSize(3);
+      display.print(msgOK);
+      display.display();
+      delay(TIME_DELAY);
+      break;
+    }
+    counter--;
+    yield();
+  } while (counter >= 0 && counter <= 5);
+}
+
+void FSinit()
+{
+  if (!LittleFS.begin())
+  {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, STATUS_ERR, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+    display.println(F("FS"));
+    display.setTextSize(3);
+    display.println(msgERR);
+    display.display();
+    delay(TIME_DELAY_MSG_LONG);
+    do
+    {
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.println(F("-> FS Mount ERR"));
+      display.println(F("Press to skip"));
+      display.display();
+      delay(TIME_DELAY_MSG);
+      yield();
+    } while (digitalRead(D4) == HIGH);
+  }
+  else
+  {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.drawBitmap(0, IMG_H * 0, STATUS_OK, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+    display.println(F("File System"));
+    display.setTextSize(3);
+    display.print(msgOK);
+    display.display();
+    delay(TIME_DELAY_MSG);
+  }
+}
+
+void FScheckMemory()
+{
+  FSInfo fs_info;         // Create FSInfo structure
+  LittleFS.info(fs_info); // Fill out with FS health data
+  float mTotalKB = (float)fs_info.totalBytes / 1024.0;
+  float mUsedKB = (float)fs_info.usedBytes / 1024.0;
+  int percent = (int)mTotalKB * THRESHOLD_PERCENT_MEMORY_FULL / 100;
+  if (mUsedKB >= percent)
+    displayMsg("-> Memory is full!");
+}
+
+void FSgarbageCollection()
+{
+  LittleFS.gc();
+}
+
+String FScountFiles()
+{
   int counter = 0;
-  Dir dir = SPIFFS.openDir("/");
+  Dir dir = LittleFS.openDir("/");
   while (dir.next())
   {
     counter++;
@@ -634,10 +910,19 @@ String SPIFFScountFiles() {
   return String(counter);
 }
 
-String SPIFFSlistFiles()
+float FScheckMemoryKB()
+{
+  Dir dir = LittleFS.openDir("/");
+  int size = 0;
+  while (dir.next())
+    size += dir.fileSize();
+  return (float)size / 1024;
+}
+
+String FSlistFiles()
 {
   String listFilesStr = "";
-  Dir dir = SPIFFS.openDir("/"); // File name should starting with "/"
+  Dir dir = LittleFS.openDir("/"); // File name should starting with "/"
   while (dir.next())
   {
     listFilesStr += dir.fileName();
@@ -657,9 +942,9 @@ String SPIFFSlistFiles()
     return listFilesStr = "No data";
 }
 
-void SPIFFSreadFile()
+void FSreadFile()
 {
-  Dir dir = SPIFFS.openDir("/"); // File name should starting with "/"
+  Dir dir = LittleFS.openDir("/"); // File name should starting with "/"
   while (dir.next())
   {
     yield();
@@ -675,7 +960,7 @@ void SPIFFSreadFile()
 #endif
 
     // Open a file
-    File file = SPIFFS.open(fileName, "r");
+    File file = LittleFS.open(fileName, "r");
     if (!file)
     {
 #ifdef SERIAL_OUT
@@ -701,12 +986,13 @@ void SPIFFSreadFile()
   }
 }
 
-// SPIFFS Recording
+// FS Recording
 // ============================================
-void SPIFFSwriteFile()
+void FSwriteFile()
 {
+  File fileObject;
   static String fileName;
-  static bool nameNotCreated = true, jsonHeadNotCreated = true;
+  static bool nameNotCreated = true, jsonHeadNotCreated = true, fileCreated = false;
   bool resetFlags = false;
   static byte cycles = 0;
 
@@ -714,13 +1000,13 @@ void SPIFFSwriteFile()
   {
     if (nameNotCreated)
     {
-      fileName = "/t-"; // SPIFFS limitation: of 31 chars per file name
+      fileName = "tr"; // FS limitation: of 31 chars per file name
       fileName += dateStr;
       fileName += "-";
       fileName += timeStr;
       fileName += ":";
       fileName += timeSec;
-      fileName += ".jt";
+      fileName += ".json";
       nameNotCreated = false;
     }
     else
@@ -731,7 +1017,7 @@ void SPIFFSwriteFile()
 #endif
     }
 
-    File fileObject = SPIFFS.open(fileName, "a"); // Open for appending (writing at end of file)
+    fileObject = LittleFS.open(fileName, "a"); // Open for appending (writing at end of file)
     if (fileObject)
     {
       if (jsonHeadNotCreated)
@@ -740,14 +1026,14 @@ void SPIFFSwriteFile()
         jsonHead = "{\n";
         jsonHead += " \"device\": {\n";
         jsonHead += "  \"id\": \"";
-        jsonHead += devMac + ",\n";
-        jsonHead += "  \"name\": \"esp8266\"\n";
+        jsonHead += devMac + "\",\n";
+        jsonHead += "  \"name\": \"";
+        jsonHead += deviceName;
+        jsonHead += "\"\n";
         jsonHead += " },\n";
         //
         jsonHead += " \"file_name\": \"";
         jsonHead += fileName + "\",\n";
-        jsonHead += " \"distance\": ";
-        jsonHead += String(distanceKm) + ",\n";
         jsonHead += " \"start_date_utc\": \"";
         jsonHead += dateStr + "\",\n";
         jsonHead += " \"start_time_utc\": \"";
@@ -758,38 +1044,81 @@ void SPIFFSwriteFile()
         jsonHeadNotCreated = false;
       }
 
-      // Form JSON body from Points
+      // Form JSON body from the points
       String jsonBody;
       jsonBody = "   {\n";
-      jsonBody += "    lat : ";
+      jsonBody += "    \"lat\" : ";
       jsonBody += String(lat, 6);
       jsonBody += ",\n";
-      jsonBody += "    lng : ";
+      jsonBody += "    \"lng\" : ";
       jsonBody += String(lng, 6);
       jsonBody += "\n";
       jsonBody += "   },\n";
       // Print to the fileObject
       fileObject.print(jsonBody);
-
       fileObject.close();
-      displayMsg("File saved!");
+      fileCreated = true;
+      displayMsg("-> File Saved!");
     }
     else
     {
       // File does not opened successfully
-      displayMsg("File OPEN ERR!");
+      displayMsg("-> File OPEN ERR!");
     }
   }
-  else
+  else if (fileCreated)
   {
-    // End the file
-    resetFlags = true;
+    fileObject = LittleFS.open(fileName, "r+"); // Open for reading and writing
+    if (fileObject)
+    {
+#ifdef SERIAL_OUT
+      Serial.println(F("-------------"));
+      Serial.print(F(" -> Created File Size: "));
+      Serial.println(fileObject.size());
+      Serial.print(F(" -> Position: "));
+      Serial.println(fileObject.position());
+#endif
+
+      // SeekEnd moves current position in a file from end - offset
+      bool seekResult = fileObject.seek(2, SeekEnd);
+      if (seekResult)
+      {
+#ifdef SERIAL_OUT
+        int position = fileObject.position(); // Returns the current position inside the file, in bytes.
+        Serial.print(F(" -> Current Position: "));
+        Serial.println(position);
+#endif
+        String jsonEnd; // End the file
+        jsonEnd += "\n";
+        jsonEnd += " ],\n";
+        jsonEnd += " \"distance\": ";
+        jsonEnd += String(distanceKm) + ",\n";
+        jsonEnd += " \"end_date_utc\": \"";
+        jsonEnd += dateStr + "\",\n";
+        jsonEnd += " \"end_time_utc\": \"";
+        jsonEnd += timeStr + ":" + timeSec + "\"\n";
+        jsonEnd += "}\n";
+        fileObject.print(jsonEnd);
+        fileObject.close();
+        displayMsg("-> File done!");
+        resetFlags = true;
+      }
+      else
+      {
+#ifdef SERIAL_OUT
+        Serial.print(F("File seek ERR:"));
+#endif
+      }
+    }
+    else
+      displayMsg("-> File OPEN ERR!");
   }
 
-  if (resetFlags)
+  if (resetFlags) // Reset flags
   {
     nameNotCreated = true;
     jsonHeadNotCreated = true;
+    fileCreated = false;
   }
 }
 
@@ -798,6 +1127,14 @@ void SPIFFSwriteFile()
 void displayMsg(String s)
 {
   msgLog = s;
+}
+
+// Reset variables
+// ============================
+void RSTValues()
+{
+  distanceKm = 0.0;
+  counterPoints = 0;
 }
 
 // Button
@@ -832,19 +1169,68 @@ void displayChangeActivity()
 
 void displaySplashScreen()
 {
+  // display.clearDisplay();
+  // display.setTextSize(1);
+  // display.setCursor(display.width() / 2 - OFFSET_X, display.height() / 2 - OFFSET_Y);
+  // display.println(" ");
+  // display.display();
+  // delay(TIME_DELAY_MSG);
+
   for (int i = 0; i < TIMES; i++)
   {
-    for (int i = 0; i < sizeof(RUNNING_MAN_R) / 8; i++)
+    for (int i = 0; i < sizeof(RUNNING_MAN_RIGHT) / 8; i++)
     {
       display.clearDisplay();
-      display.drawBitmap(((display.width() - IMG_W) / 2) - OFFSET, (display.height() - IMG_H) / 2, RUNNING_MAN_R[i], IMG_H, IMG_W, WHITE);
-      display.setCursor(((display.width() - IMG_W) / 2) - OFFSET + IMG_W, (display.height() - IMG_H) / 2);
-      display.println("eGPS");
+      display.drawBitmap(((display.width() - IMG_W) / 2), (display.height() - IMG_H) / 2, RUNNING_MAN_RIGHT[i], IMG_H, IMG_W, WHITE);
       display.display();
       yield();
-      delay(150);
+      delay(TIME_DELAY_SHORT / 3);
     }
   }
+}
+
+void initChangeActivity()
+{ // Enable WiFi
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.setTextSize(1);
+  display.drawBitmap(0, IMG_H * 0, STATUS_QUESTION, IMG_H, IMG_W, WHITE);
+  display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+  display.println(F("Enable Auto Slide?"));
+  display.println(F("   Press - Yes"));
+  display.display();
+  delay(TIME_DELAY_MSG_LONG);
+
+  byte counter = 5;
+  do
+  {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    display.println(F("Countdown"));
+    display.setTextSize(3);
+    display.print(counter);
+    display.display();
+    delay(TIME_DELAY);
+    if (btnPressedInitMode)
+    {
+      statusChangeActivity = true;
+      btnPressedInitMode = false;
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.setTextSize(1);
+      display.drawBitmap(0, IMG_H * 0, STATUS_OK, IMG_H, IMG_W, WHITE);
+      display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+      display.println(F("Auto Slide Enabled"));
+      display.setTextSize(3);
+      display.println(msgOK);
+      display.display();
+      delay(TIME_DELAY_MSG);
+      break;
+    }
+    counter--;
+    yield();
+  } while (counter >= 0 && counter <= 5);
 }
 
 // Calculations
@@ -876,6 +1262,22 @@ double calcMaxSpeed(double &maxSpd, double &spd)
     return maxSpd;
   }
 }
+
+double calcBestTempo(double &bMinpkm, double &minpkm)
+{
+  if (minpkm != 0)
+  {
+    if (bMinpkm < minpkm)
+      return bMinpkm;
+    else
+    {
+      bMinpkm = minpkm;
+      return bMinpkm;
+    }
+  }
+  else
+    return minpkm;
+};
 
 // ADC
 // ==================================
@@ -1026,7 +1428,7 @@ void displayBatteryLevel()
     }
   }
 
-  display.setCursor(X + IMG_W, Y);
+  display.setCursor(X + IMG_W + OFFSET_ICON, Y);
   display.setTextSize(1);
   display.print(F("Bat charge: "));
   display.setTextSize(3);

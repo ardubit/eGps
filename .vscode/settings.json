@@ -8,6 +8,7 @@
     "locale": "cpp",
     "ios": "cpp",
     "iterator": "cpp",
-    "random": "cpp"
+    "random": "cpp",
+    "*.tcc": "cpp"
   }
 }
