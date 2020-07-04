@@ -4,7 +4,7 @@
 */
 
 // #define SERIAL_OUT
-#define REV "02.07.20"
+#define REV "04.07.20"
 
 #include "headers/Images.h"
 
@@ -29,8 +29,9 @@ SoftwareSerial ss(D3, D0);
 #define OFFSET_ICON 2
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-#define TIME_DISPLAY_ON 50 * 1000
+#define TIME_DISPLAY_ON 60 * 1000
 #define TIME_CHANGE_ACTIVITY 5 * 1000
+#define TIME_CALCULATIONS 2000 // 2 sec
 #define TIME_CALC_DISTANCE 3000
 #define TIME_CALC_BATLEVEL 5000
 #define TIME_LONGPRESS 2000
@@ -53,7 +54,7 @@ const char *msgOK PROGMEM = "OK";
 const char *msgERR PROGMEM = "ERR";
 
 unsigned long sTimeAct = 0, sTimeDst = 0, sTimeBat = 0, sTimeWrt = 0, sTimeSrv = 0;
-unsigned long sTimeBtn = 0;
+unsigned long sTimeBtn = 0, sTimeCalcs = 0;
 
 bool initMode = true, dispActive = true;
 bool btnPressed = false, btnLongPressed = false, btnPressedInitMode = false;
@@ -69,7 +70,7 @@ double lat = 0.0, lng = 0.0;
 
 int sat = 0;
 int ageSpd = 0, ageAlt = 0, ageSat = 0;
-double mps = 0.0, kmph = 0.0, minpkm = 0.0, bMinpkm = 0.0, alt = 0.0, hdop = 0.0;
+double mps = 0.0, kmph = 0.0, alt = 0.0, hdop = 0.0, minpkm = 999.99, bMinpkm = 999.99;
 double maxKmph = 0.0, maxMps = 0.0;
 double distanceKm = 0.0;
 unsigned long counterPoints = 0;
@@ -113,7 +114,7 @@ void setup()
 
   display.clearDisplay();
   display.setCursor(0, 0);
-  display.println(F("Boot"));
+  display.println(F("Boot Menu"));
   display.drawBitmap(0, IMG_H * 1, STATUS_OK, IMG_H, IMG_W, WHITE);
   display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 1);
   display.println(F("PRESS to Enter"));
@@ -357,26 +358,20 @@ void loop()
   if (gps.speed.isUpdated())
   {
     // 1.0 is good a precision
-    if (!(gps.speed.mps() <= 0.79))
+    if (!(gps.speed.mps() <= 0.75))
       mps = gps.speed.mps();
     else
       mps = 0.0;
 
-    if (!(gps.speed.kmph() <= 1.249))
+    if (!(gps.speed.kmph() <= 1.25))
       kmph = gps.speed.kmph();
     else
       kmph = 0.0;
 
     ageSpd = gps.speed.age();
 
-    if (!(kmph <= 0.49))
+    if (!(kmph <= 0.5))
       minpkm = 60.0 / kmph;
-    else
-      minpkm = 0.0;
-
-    maxKmph = calcMaxSpeed(maxKmph, kmph);
-    maxMps = calcMaxSpeed(maxMps, mps);
-    bMinpkm = calcBestTempo(bMinpkm, minpkm);
 
 #ifdef SERIAL_OUT
     Serial.print(F("SPEED: "));
@@ -605,6 +600,16 @@ void loop()
     calcDistanceKm();
   }
 
+  // Calculations
+  // ============================ Task
+  if (millis() >= sTimeCalcs + TIME_CALCULATIONS)
+  {
+    sTimeCalcs += TIME_CALCULATIONS;
+    maxKmph = calcMaxSpeed(maxKmph, kmph);
+    maxMps = calcMaxSpeed(maxMps, mps);
+    bMinpkm = calcBestTempo(bMinpkm, minpkm);
+  }
+
   // Detect LongPress (Listener)
   // ============================ Timer
   if (millis() >= sTimeBtn + TIME_LONGPRESS) // (sTimeBtn) updates when button is pressed
@@ -627,7 +632,7 @@ void loop()
 
     if (statusRec)
     {
-      RSTValues();
+      RSTValues(); // Reset values
       display.setTextSize(3);
       display.println(F("REC"));
       display.setTextSize(1);
@@ -1133,8 +1138,10 @@ void displayMsg(String s)
 // ============================
 void RSTValues()
 {
-  distanceKm = 0.0;
   counterPoints = 0;
+  distanceKm = 0.0;
+  mps = kmph = maxMps = maxKmph = 0.0;
+  minpkm = bMinpkm = 999.99;
 }
 
 // Button
@@ -1265,18 +1272,16 @@ double calcMaxSpeed(double &maxSpd, double &spd)
 
 double calcBestTempo(double &bMinpkm, double &minpkm)
 {
-  if (minpkm != 0)
+  if (!(minpkm <= 1.0))
   {
-    if (bMinpkm < minpkm)
-      return bMinpkm;
-    else
+    if (bMinpkm > minpkm)
     {
       bMinpkm = minpkm;
       return bMinpkm;
     }
+    else
+      return bMinpkm;
   }
-  else
-    return minpkm;
 };
 
 // ADC
