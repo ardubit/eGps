@@ -342,11 +342,11 @@ PROGMEM const unsigned char SPEED[] = {
 // Tempo
 PROGMEM const unsigned char TEMPO[] = {
     /* 8, 8, */
-    B01010000,
     B10100000,
     B01010000,
     B10100000,
-    B11111000,
+    B01010000,
+    B10101000,
     B11111100,
     B11111110,
     B00000000};
@@ -432,6 +432,18 @@ PROGMEM const unsigned char ALTITUDE[] = {
     B00010000,
     B00101000,
     B01111100,
+    B11111110,
+    B00000000};
+
+// HDOP
+PROGMEM const unsigned char HDOP[] = {
+    /* 8, 8, */
+    B10101010,
+    B11101110,
+    B10101010,
+    B01010100,
+    B00101000,
+    B00111000,
     B11111110,
     B00000000};
 

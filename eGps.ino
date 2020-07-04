@@ -4,7 +4,7 @@
 */
 
 // #define SERIAL_OUT
-#define REV "04.07.20"
+#define REV "05.07.20"
 
 #include "headers/Images.h"
 
@@ -37,13 +37,14 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define TIME_LONGPRESS 2000
 #define TIME_WRITE_FILE 5000
 #define TIME_SERVICES 60 * 1000
+#define TIME_DEBOUNCE 250
 
 #define TIME_DELAY_MSG 2000
 #define TIME_DELAY_MSG_LONG 4000
 #define TIME_DELAY_SHORT 500
 #define TIME_DELAY 1000
 
-#define ACTIVITIES_NUM 12 // activity + 1
+#define ACTIVITIES_NUM 10 // activity + 1
 byte activity = 0;
 
 #define THRESHOLD_PERCENT_MEMORY_FULL 80
@@ -114,7 +115,7 @@ void setup()
 
   display.clearDisplay();
   display.setCursor(0, 0);
-  display.println(F("Boot Menu"));
+  display.println(F("Boot Setup"));
   display.drawBitmap(0, IMG_H * 1, STATUS_OK, IMG_H, IMG_W, WHITE);
   display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 1);
   display.println(F("PRESS to Enter"));
@@ -232,18 +233,33 @@ void setup()
 
 void ICACHE_RAM_ATTR ISR_button_falling()
 {
-  if (!initMode) // If only init is ended
+  // Important to use "volatile"
+  volatile static bool ISRlatch = true;
+  volatile static unsigned long sTimeLatch = millis();
+
+  // Debounce. Reset latch
+  // ============================ Task
+  if (millis() >= sTimeLatch + TIME_DEBOUNCE)
   {
-    btnPressed = true;
-    if (dispActive) // If display is active
-    {
-      activity++;
-      activity = activity % ACTIVITIES_NUM;
-    }
+    ISRlatch = true;
   }
-  else
+
+  if (ISRlatch)
   {
-    btnPressedInitMode = true;
+    ISRlatch = false;
+    // Run code
+    if (!initMode) // If only init is ended
+    {
+      btnPressed = true;
+      if (dispActive) // If display is active
+      {
+        displayChangeActivity();
+      }
+    }
+    else
+    {
+      btnPressedInitMode = true;
+    }
   }
 }
 
@@ -404,7 +420,7 @@ void loop()
     display.setTextSize(1);
     display.drawBitmap(0, IMG_H * 0, TEMPO, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.print(F("Tmp min/km: "));
+    display.print(F("Tempo MIN/KM: "));
 
     if (minpkm > 0.33 && minpkm <= 4.0)
       display.println(F("* * * *"));
@@ -427,7 +443,7 @@ void loop()
     display.setTextSize(1);
     display.drawBitmap(0, IMG_H * 0, SPEED, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.print(F("Spd m/s: "));
+    display.print(F("Spd M/S: "));
     display.print(F("age:"));
     display.println(ageSpd);
     display.setTextSize(3);
@@ -440,7 +456,7 @@ void loop()
     display.setTextSize(1);
     display.drawBitmap(0, IMG_H * 0, SPEED, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.print(F("Spd km/h: "));
+    display.print(F("Spd KM/H: "));
     display.print(F("age:"));
     display.println(ageSpd);
     display.setTextSize(3);
@@ -453,51 +469,51 @@ void loop()
     display.setTextSize(1);
     display.drawBitmap(0, IMG_H * 0, DISTANCE, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.print(F("Dist km: "));
+    display.print(F("Dist KM: "));
     display.print(F("pts:"));
     display.println(counterPoints);
     display.setTextSize(3);
     display.println(distanceKm);
     display.display();
     break;
+  // case 5:
+  //   display.clearDisplay();
+  //   display.setCursor(0, 0);
+  //   display.setTextSize(1);
+  //   display.drawBitmap(0, IMG_H * 0, ALTITUDE, IMG_H, IMG_W, WHITE);
+  //   display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+  //   display.print(F("Alt m: "));
+  //   display.print(F("age:"));
+  //   display.println(ageAlt);
+  //   display.setTextSize(3);
+  //   display.println(alt);
+  //   display.display();
+  //   break;
+  // case 6:
+  //   display.clearDisplay();
+  //   display.setCursor(0, 0);
+  //   display.setTextSize(1);
+  //   display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
+  //   display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+  //   display.print(F("Sat: "));
+  //   display.print(F("fix:"));
+  //   display.println(ageSat);
+  //   display.setTextSize(3);
+  //   display.println(sat);
+  //   display.display();
+  //   break;
+  // case 7:
+  //   display.clearDisplay();
+  //   display.setCursor(0, 0);
+  //   display.setTextSize(1);
+  //   display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
+  //   display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
+  //   display.println(F("HDOP:"));
+  //   display.setTextSize(3);
+  //   display.println(hdop);
+  //   display.display();
+  //   break;
   case 5:
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.setTextSize(1);
-    display.drawBitmap(0, IMG_H * 0, ALTITUDE, IMG_H, IMG_W, WHITE);
-    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.print(F("Alt m: "));
-    display.print(F("age:"));
-    display.println(ageAlt);
-    display.setTextSize(3);
-    display.println(alt);
-    display.display();
-    break;
-  case 6:
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.setTextSize(1);
-    display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
-    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.print(F("Sat: "));
-    display.print(F("fix:"));
-    display.println(ageSat);
-    display.setTextSize(3);
-    display.println(sat);
-    display.display();
-    break;
-  case 7:
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.setTextSize(1);
-    display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
-    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.println(F("HDOP:"));
-    display.setTextSize(3);
-    display.println(hdop);
-    display.display();
-    break;
-  case 8:
     if (millis() >= sTimeBat + TIME_CALC_BATLEVEL)
     {
       sTimeBat += TIME_CALC_BATLEVEL;
@@ -506,20 +522,20 @@ void loop()
       display.display();
     }
     break;
-  case 9:
+  case 6:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
     display.drawBitmap(0, IMG_H * 0, TIME, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, 0);
-    display.print(F("Time UTC:"));
-    display.print(timeSec);
-    display.println(" sec");
+    display.println(F("Time UTC:"));
     display.setTextSize(3);
-    display.println(timeStr);
+    display.print(timeStr);
+    display.setTextSize(1);
+    display.print(":" + timeSec);
     display.display();
     break;
-  case 10:
+  case 7:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
@@ -536,7 +552,33 @@ void loop()
       FSreadFile();
 #endif
     break;
-  case 11:
+  case 8:
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.setTextSize(1);
+    // Sat
+    display.drawBitmap(0, IMG_H * 0, SATELLITE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 0);
+    display.print(F("Satellites:"));
+    display.println(sat);
+    // HDOP
+    display.drawBitmap(0, IMG_H * 1, HDOP, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 1);
+    display.print(F("HDOP      :"));
+    display.println(hdop);
+    // Alt
+    display.drawBitmap(0, IMG_H * 2, ALTITUDE, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 2);
+    display.print(F("Altitude  :"));
+    display.println(alt);
+    //
+    display.drawBitmap(0, IMG_H * 3, TIME, IMG_H, IMG_W, WHITE);
+    display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 3);
+    display.print(F("UTC Time  :"));
+    display.println(timeStr + ":" + timeSec);
+    display.display();
+    break;
+  case 9:
     display.clearDisplay();
     display.setCursor(0, 0);
     display.setTextSize(1);
@@ -548,18 +590,18 @@ void loop()
     // Max Speed
     display.drawBitmap(0, IMG_H * 1, SPEED, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 1);
-    display.print(F(" Max Speed:"));
+    display.print(F("Max Speed :"));
     display.println(maxKmph);
     // Total Distance
     display.drawBitmap(0, IMG_H * 2, DISTANCE, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 2);
-    display.print(F("  Distance:"));
+    display.print(F("Distance  :"));
     display.println(distanceKm);
     // Elapsed Time
     display.drawBitmap(0, IMG_H * 3, TIME, IMG_H, IMG_W, WHITE);
     display.setCursor(display.getCursorX() + IMG_W + OFFSET_ICON, IMG_H * 3);
-    display.print(F("  UTC Time:"));
-    display.println(timeStr);
+    display.print(F("UTC Time  :"));
+    display.println(timeStr + ":" + timeSec);
     display.display();
     break;
   default:
@@ -920,7 +962,10 @@ float FScheckMemoryKB()
   Dir dir = LittleFS.openDir("/");
   int size = 0;
   while (dir.next())
+  {
     size += dir.fileSize();
+    yield();
+  }
   return (float)size / 1024;
 }
 
@@ -953,7 +998,6 @@ void FSreadFile()
   while (dir.next())
   {
     yield();
-
     // Read a file name
     String fileName = dir.fileName();
 #ifdef SERIAL_OUT
@@ -1190,8 +1234,8 @@ void displaySplashScreen()
       display.clearDisplay();
       display.drawBitmap(((display.width() - IMG_W) / 2), (display.height() - IMG_H) / 2, RUNNING_MAN_RIGHT[i], IMG_H, IMG_W, WHITE);
       display.display();
-      yield();
       delay(TIME_DELAY_SHORT / 3);
+      yield();
     }
   }
 }
@@ -1435,7 +1479,7 @@ void displayBatteryLevel()
 
   display.setCursor(X + IMG_W + OFFSET_ICON, Y);
   display.setTextSize(1);
-  display.print(F("Bat charge: "));
+  display.print(F("Battery charge: "));
   display.setTextSize(3);
   display.setCursor(X, Y + IMG_H);
   display.print(batPercent);
